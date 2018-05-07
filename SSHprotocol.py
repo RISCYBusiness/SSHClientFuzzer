@@ -77,7 +77,7 @@ class SSH_BinaryPacket(logger.logger, riscy_fuzzer.riscy_fuzzer):
         ) 
         
         final_packet = "".join(self.packet_blob)
-        self.log("Raw Packet Bytes\n{}".format(final_packet.encode('hex')), isClient=False)
+       #self.log("Raw Packet Bytes\n{}".format(final_packet.encode('hex')), isClient=False)
         return final_packet
 
 # Key exchange protocol
@@ -203,9 +203,10 @@ class SSH_KEYX(SSH_BinaryPacket):
             packet.append(chr(self.keyx_data['first_kex_packet_follows']))
         except:
             packet.append(chr(random.randint(0,1)==0))
-            
-        packet.append(struct.pack(">I", int(self.keyx_data['reserved'])))
-
+        try:
+            packet.append(struct.pack(">I", int(self.keyx_data['reserved'])))
+        except:
+            packet.append(struct.pack(">I", 0))
         log_message =[ '----Crafted KeyX Response-----' ]
         for key in self.keyx_data.keys():
             log_message.append("-- {} : {}".format(key, self.keyx_data[key]))
