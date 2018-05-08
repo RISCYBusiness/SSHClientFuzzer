@@ -4,12 +4,13 @@ import os
 import random
 import string
 import time
-import riscy_fuzzer
+from riscy_fuzzer import riscy_fuzzer
+from riscy_fuzzer import FUZZ_STYLE
 import logger
             
             
 # Binary Packet Protocol
-class SSH_BinaryPacket(logger.logger, riscy_fuzzer.riscy_fuzzer):
+class SSH_BinaryPacket(logger.logger, riscy_fuzzer):
     PACKET_ALIGNMENT = 8
     """
     SSH Transport Layer Protocol    2.0 rfc4253
@@ -46,6 +47,7 @@ class SSH_BinaryPacket(logger.logger, riscy_fuzzer.riscy_fuzzer):
          the MAC algorithm MUST be "none".
     """
     def __init__(self):
+        riscy_fuzzer.__init__(self)
         self.packet_blob = []
         self.packet_size = 0
         self.padding_length = 0
@@ -59,7 +61,7 @@ class SSH_BinaryPacket(logger.logger, riscy_fuzzer.riscy_fuzzer):
     """
     Converts raw payload to SSH binary packet
     """
-    def CraftBP(self, payload, packet_size=None):
+    def CraftBP(self, payload):
         
         self.payload = payload
         self.packet_blob.append(struct.pack(">i", 0)) # setup dummy length
@@ -67,17 +69,13 @@ class SSH_BinaryPacket(logger.logger, riscy_fuzzer.riscy_fuzzer):
         self.packet_blob.append(self.payload)
         self.padding_length = self.compute_padding_length("".join(self.packet_blob))
         self.packet_blob[1] = chr(self.padding_length)
-        if packet_size:
-            self.packet_size = struct.pack(">i", packet_size)
-        else:
-            self.packet_size = struct.pack(">i", 6+len("".join(self.packet_blob)))
+        self.packet_size = struct.pack(">i", 6+len("".join(self.packet_blob)))
         self.packet_blob[0] = self.packet_size
         self.packet_blob.append(
             "A"*self.padding_length # generate "random" padding
         ) 
-        
         final_packet = "".join(self.packet_blob)
-       #self.log("Raw Packet Bytes\n{}".format(final_packet.encode('hex')), isClient=False)
+        #self.log("Raw Packet Bytes\n{}".format(final_packet.encode('hex')), isClient=False)
         return final_packet
 
 # Key exchange protocol
@@ -100,10 +98,6 @@ class SSH_KEYX(SSH_BinaryPacket):
       boolean      first_kex_packet_follows
       uint32       0 (reserved for future extension)
     """    
-    GARBLE_LENGTH = 5000
-    GARBLE_WEIGHT = 8
-    EXPANSION_WEIGHT = 3
-    SEVERITY_WEIGHT = 200
     
     # Proper KeyX Server Response (OpenSSH_5.5 Debian)
     SSH_MSG_KEXINIT = '\x14'
@@ -141,31 +135,32 @@ class SSH_KEYX(SSH_BinaryPacket):
             'reserved': self.RESERVED
         }
 
-    def FuzzParams(self, severity=.5):
+    def FuzzParams(self):
         protocol_attributes = self.keyx_data.keys()
-        iterations = int(severity*len(protocol_attributes))
+        iterations = int(self.fuzz_severity*len(protocol_attributes))
+        if self.fuzz_style == FUZZ_STYLE.SNIPER:
+            self.keyx_data = self.load_sniper_data()
+            return
         for _ in range(0, iterations):
-            index = self.keyx_data.keys()[random.randrange(0,len(protocol_attributes)-1)]
-            if random.randint(0, self.GARBLE_WEIGHT) == 0:
-                self.keyx_data[index] = self.fuzz_str(length=random.randint(1, self.GARBLE_LENGTH)) # Garble
-            else:
-                expand_length = 0
-                if random.randint(0, self.EXPANSION_WEIGHT) == 0:
-                    expand_length = random.random()
-                if type(self.keyx_data[index]) == bool:  # Python isinstance "bool == int"  -___-
-                    self.keyx_data[index] = random.randint(0,1) == 0
-                elif isinstance(self.keyx_data[index], str):
-                    self.keyx_data[index] = self.mutate_str(self.keyx_data[index], severity = random.randint(10, self.SEVERITY_WEIGHT), expansion = expand_length) # Mutate
-                elif isinstance(self.keyx_data[index], int):
+            index = self.keyx_data.keys()[random.randrange(0, len(protocol_attributes)-1)]
+            if self.fuzz_style == FUZZ_STYLE.MUTATE:
+                if isinstance(self.keyx_data[index], int):
                     self.keyx_data[index] = self.fuzz_int()
-                else:
-                    print 'unknown type read!'
-                    exit(0)
+                    continue
+                self.keyx_data[index] = self.mutate_str(self.keyx_data[index]) # Mutate
+            elif self.fuzz_style == FUZZ_STYLE.BUFFER_BUSTER:
+                self.keyx_data[index] = self.fuzz_str(random.randint(1,10)*1000)
+            
 
-    def CraftKeyX(self, fuzzy=False, severity=.5):
+    def CraftKeyX(self):
         packet = []
-        if fuzzy:
-            self.FuzzParams(severity=severity)
+        
+        if self.fuzz_style != FUZZ_STYLE.NONE:
+            self.FuzzParams()
+            
+        if self.fuzz_style == FUZZ_STYLE.SNIPER: # sniper loads raw data, so no need packing it
+            self.log(self.keyx_data, isClient=False)
+            return self.CraftBP(self.keyx_data)
         
         packet.append(self.keyx_data['ssh_msg_keyxinit'])
         packet.append(self.keyx_data['cookie'])

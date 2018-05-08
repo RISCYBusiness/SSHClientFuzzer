@@ -1,4 +1,7 @@
 class logger:
+    def removeNonAscii(s): 
+        return ''.join([i if ord(i) < 128 else ' ' for i in s])
+
     def log(self, msg, isClient=False):
         try:
             color = '\033[92m' # green
